@@ -1,0 +1,44 @@
+name: Build Android App
+
+on:
+  workflow_dispatch: # Allows you to click a button to start the build
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install MLC LLM
+        run: |
+          pip install --pre --force-reinstall mlc-llm mlc-ai-nightly -f https://mlc.ai/wheels
+          
+      - name: Generate Android Library
+        run: |
+          # This compiles the model config you edited
+          cd android/MLCChat
+          export MLC_LLM_SOURCE_DIR=../..
+          mlc_llm package mlc-package-config.json
+
+      - name: Build APK
+        working-directory: android/MLCChat
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: android/MLCChat/app/build/outputs/apk/debug/app-debug.apk
