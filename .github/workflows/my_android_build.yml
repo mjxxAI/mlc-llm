@@ -32,16 +32,14 @@ jobs:
 
       - name: Install MLC LLM (CPU Nightly)
         run: |
-          # The critical fix: Installing the CPU-specific nightly build
           pip install --pre --force-reinstall mlc-llm-nightly-cpu mlc-ai-nightly-cpu -f https://mlc.ai/wheels
 
       - name: Generate Android Library
         run: |
-          # Enter the android directory and package the config
           cd android/MLCChat
           export MLC_LLM_SOURCE_DIR=../..
-          # This command compiles the C++ library
-          mlc_llm package mlc-package-config.json
+          # FIX: Run using python module syntax to avoid "command not found"
+          python -m mlc_llm package mlc-package-config.json
 
       - name: Build APK
         working-directory: android/MLCChat
