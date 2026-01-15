@@ -38,8 +38,8 @@ jobs:
         run: |
           cd android/MLCChat
           export MLC_LLM_SOURCE_DIR=../..
-          # FIX: Run using python module syntax to avoid "command not found"
-          python -m mlc_llm package mlc-package-config.json
+          # FIX: Added '--package-config' flag which is required by the new version
+          python -m mlc_llm package --package-config mlc-package-config.json
 
       - name: Build APK
         working-directory: android/MLCChat
