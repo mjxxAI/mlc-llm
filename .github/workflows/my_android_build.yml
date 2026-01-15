@@ -7,6 +7,20 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Free Disk Space
+        run: |
+          # The GitHub runner runs out of space with large models.
+          # We delete unused pre-installed software (.NET, Haskell, etc) to make room.
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
@@ -38,7 +52,7 @@ jobs:
         run: |
           cd android/MLCChat
           export MLC_LLM_SOURCE_DIR=../..
-          # FIX: Added '--package-config' flag which is required by the new version
+          # Using python module syntax and the required flag
           python -m mlc_llm package --package-config mlc-package-config.json
 
       - name: Build APK
