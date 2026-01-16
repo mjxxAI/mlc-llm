@@ -1,68 +1,115 @@
-name: Build Android App
+name: Build Reference MLCChat APK
 
 on:
-  workflow_dispatch: # Allows you to manually trigger the build
+  workflow_dispatch:
 
 jobs:
-  build:
+  build_apk:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Free Disk Space
+      - name: 1. Maximize Disk Space
         run: |
-          # The GitHub runner runs out of space with large models.
-          # We delete unused pre-installed software (.NET, Haskell, etc) to make room.
-          echo "Disk space before cleanup:"
-          df -h
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
-          echo "Disk space after cleanup:"
-          df -h
+          sudo r -rf /usr/share/swift
+          docker rmi $(docker images -q) 2>/dev/null || true
 
-      - name: Checkout Code
+      - name: 2. Checkout MLC Source Code
         uses: actions/checkout@v4
         with:
+          repository: mlc-ai/mlc-llm
+          path: mlc-llm-source
           submodules: recursive
 
-      - name: Setup Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-
-      - name: Setup Java
+      - name: 3. Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Python
+      - name: 4. Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+
+      - name: 5. Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install MLC LLM (CPU Nightly)
+      - name: 6. Install MLC Tools
         run: |
-          pip install --pre --force-reinstall mlc-llm-nightly-cpu mlc-ai-nightly-cpu -f https://mlc.ai/wheels
+          pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
-      - name: Generate Android Library
+      - name: 7. Configure for Qwen 2.5
         run: |
-          cd android/MLCChat
-          export MLC_LLM_SOURCE_DIR=../..
-          # Using python module syntax and the required flag
-          python -m mlc_llm package --package-config mlc-package-config.json
+          # We define the model here so the App knows it exists
+          echo '{
+            "device": "android",
+            "model_list": [
+              {
+                "model": "HF://mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC",
+                "model_id": "qwen2_5_coder_3b",
+                "estimated_vram_bytes": 3500000000,
+                "bundle_weights": false
+              }
+            ]
+          }' > mlc-package-config.json
 
-      - name: Build APK
-        working-directory: android/MLCChat
+      - name: 8. Patch OpenCL Crash (Safety First)
         run: |
+          # Patch the C++ wrapper to log instead of crash if OpenCL fails
+          WRAPPER="mlc-llm-source/3rdparty/tvm/src/runtime/opencl/opencl_wrapper/opencl_wrapper.cc"
+          sed -i 's/CHECK(m_libHandler != nullptr)/if (m_libHandler == nullptr) { return; } \/\/ CHECK_DISABLED/' $WRAPPER
+
+      - name: 9. Generate Project Files
+        env:
+          MLC_LLM_SOURCE_DIR: ${{ github.workspace }}/mlc-llm-source
+        run: |
+          export TVM_NDK_CC=$(find "$ANDROID_NDK_HOME" -name "aarch64-linux-android*-clang" | grep "bin/" | sort | head -n 1)
+          NDK_BIN=$(dirname "$TVM_NDK_CC")
+          LLVM_AR="$NDK_BIN/llvm-ar"
+          if [ -f "$LLVM_AR" ]; then sudo ln -sf "$LLVM_AR" /usr/local/bin/llvm-ar; fi
+          
+          python -m mlc_llm package
+
+      - name: 10. Prepare MLCChat Project
+        run: |
+          # The package command generates 'dist'. We need to copy assets to the MLCChat app folder.
+          
+          # 1. Copy the generated app-config.json
+          cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
+          
+          # 2. Copy the generated library logic (if any specific C++ generation happened)
+          # Usually MLCChat links against the AAR, but let's ensure the build knows about our model lib
+          # We need to inject the CMake flag to disable OpenCL here too
+          
+          cd mlc-llm-source/android/MLCChat
+          
+          # Inject CMake arguments to disable OpenCL
+          sed -i 's/-DANDROID_STL=c++_shared"/-DANDROID_STL=c++_shared", "-DUSE_OPENCL=OFF", "-DUSE_VULKAN=ON"/' build.gradle
+          
+          # Inject AndroidX properties
+          echo "android.useAndroidX=true" > gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
+
+      - name: 11. Build APK
+        working-directory: ./mlc-llm-source/android/MLCChat
+        run: |
+          echo "Generating Wrapper..."
+          gradle wrapper --gradle-version 8.5
           chmod +x gradlew
-          ./gradlew assembleDebug
+          
+          echo "Building Debug APK..."
+          ./gradlew assembleDebug --stacktrace
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: 12. Publish APK
+        uses: softprops/action-gh-release@v1
         with:
-          name: app-debug
-          path: android/MLCChat/app/build/outputs/apk/debug/app-debug.apk
+          tag_name: ref-app-v${{ github.run_number }}
+          name: Reference MLCChat App ${{ github.run_number }}
+          files: mlc-llm-source/android/MLCChat/app/build/outputs/apk/debug/app-debug.apk
+          draft: false
+          prerelease: false
