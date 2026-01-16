@@ -68,8 +68,7 @@ jobs:
           
           python -m mlc_llm package
           
-          # DEBUG: See what was actually created
-          echo "=== DIST DIRECTORY CONTENTS ==="
+          # DEBUG
           ls -R dist/ || echo "dist folder missing!"
 
       - name: 9. Prepare MLCChat Project (With Fallback)
@@ -77,24 +76,13 @@ jobs:
           # Ensure destination exists
           mkdir -p mlc-llm-source/android/MLCChat/src/main/assets/
           
-          # Check if the tool generated the config
           if [ -f "dist/assets/app-config.json" ]; then
               echo "Tool generated config found. Copying..."
               cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
           else
               echo "WARNING: Tool failed to generate app-config.json. Creating manually..."
-              # Manual generation of the required JSON structure
-              cat > mlc-llm-source/android/MLCChat/src/main/assets/app-config.json << 'JSON'
-              {
-                "model_list": [
-                  {
-                    "model_id": "qwen2_5_coder_3b",
-                    "model_lib": "qwen2_5_coder_3b",
-                    "model_url": "https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC"
-                  }
-                ]
-              }
-              JSON
+              # Fixed: Use echo instead of nested heredoc to avoid syntax errors
+              echo '{"model_list": [{"model_id": "qwen2_5_coder_3b", "model_lib": "qwen2_5_coder_3b", "model_url": "https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC"}]}' > mlc-llm-source/android/MLCChat/src/main/assets/app-config.json
           fi
           
           # Verify config exists now
