@@ -68,29 +68,34 @@ jobs:
           
           python -m mlc_llm package
           
-          # DEBUG
           ls -R dist/ || echo "dist folder missing!"
 
-      - name: 9. Prepare MLCChat Project (With Fallback)
+      - name: 9. Prepare MLCChat Project (Fixed)
         run: |
-          # Ensure destination exists
           mkdir -p mlc-llm-source/android/MLCChat/src/main/assets/
           
           if [ -f "dist/assets/app-config.json" ]; then
               echo "Tool generated config found. Copying..."
               cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
           else
-              echo "WARNING: Tool failed to generate app-config.json. Creating manually..."
-              # Fixed: Use echo instead of nested heredoc to avoid syntax errors
+              echo "WARNING: Creating manual app-config.json..."
               echo '{"model_list": [{"model_id": "qwen2_5_coder_3b", "model_lib": "qwen2_5_coder_3b", "model_url": "https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC"}]}' > mlc-llm-source/android/MLCChat/src/main/assets/app-config.json
           fi
           
-          # Verify config exists now
-          cat mlc-llm-source/android/MLCChat/src/main/assets/app-config.json
-          
           cd mlc-llm-source/android/MLCChat
           
-          # Inject AndroidX flags to fix Gradle build
+          # --- CRITICAL FIX START ---
+          # The official repo includes a broken reference to ':mlcengineexample' in settings.gradle.
+          # We must remove it to allow the build to proceed.
+          if [ -f settings.gradle ]; then
+              echo "Patching settings.gradle to remove missing module..."
+              sed -i "/mlcengineexample/d" settings.gradle
+              echo "New settings.gradle content:"
+              cat settings.gradle
+          fi
+          # --- CRITICAL FIX END ---
+          
+          # Inject AndroidX flags
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
