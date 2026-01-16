@@ -68,32 +68,25 @@ jobs:
           
           python -m mlc_llm package
           
-          ls -R dist/ || echo "dist folder missing!"
+          echo "Generated dist folder at root:"
+          ls -R dist/ || echo "dist missing"
 
-      - name: 9. Prepare MLCChat Project (Fixed)
+      - name: 9. Prepare MLCChat Project (Move Dist)
         run: |
-          mkdir -p mlc-llm-source/android/MLCChat/src/main/assets/
+          # CRITICAL FIX: The app expects 'dist' to be inside its folder.
+          echo "Moving dist folder into MLCChat..."
+          mv dist mlc-llm-source/android/MLCChat/
           
-          if [ -f "dist/assets/app-config.json" ]; then
-              echo "Tool generated config found. Copying..."
-              cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
-          else
-              echo "WARNING: Creating manual app-config.json..."
-              echo '{"model_list": [{"model_id": "qwen2_5_coder_3b", "model_lib": "qwen2_5_coder_3b", "model_url": "https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC"}]}' > mlc-llm-source/android/MLCChat/src/main/assets/app-config.json
-          fi
+          # Verify move
+          ls -F mlc-llm-source/android/MLCChat/dist/lib/mlc4j/
           
           cd mlc-llm-source/android/MLCChat
           
-          # --- CRITICAL FIX START ---
-          # The official repo includes a broken reference to ':mlcengineexample' in settings.gradle.
-          # We must remove it to allow the build to proceed.
+          # Patch settings.gradle to remove the missing example module
           if [ -f settings.gradle ]; then
-              echo "Patching settings.gradle to remove missing module..."
+              echo "Patching settings.gradle..."
               sed -i "/mlcengineexample/d" settings.gradle
-              echo "New settings.gradle content:"
-              cat settings.gradle
           fi
-          # --- CRITICAL FIX END ---
           
           # Inject AndroidX flags
           echo "android.useAndroidX=true" > gradle.properties
