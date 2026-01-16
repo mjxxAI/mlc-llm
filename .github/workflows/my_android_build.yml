@@ -1,4 +1,4 @@
-name: Build Reference MLCChat APK (Clean)
+name: Build Reference MLCChat APK (Robust)
 
 on:
   workflow_dispatch:
@@ -44,8 +44,6 @@ jobs:
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 7. Configure for Qwen 2.5
-        # We must provide this config so the build knows what to include.
-        # This is standard usage, not a hack.
         run: |
           echo '{
             "device": "android",
@@ -59,28 +57,52 @@ jobs:
             ]
           }' > mlc-package-config.json
 
-      - name: 8. Generate Project Files (Standard)
+      - name: 8. Generate Project Files
         env:
           MLC_LLM_SOURCE_DIR: ${{ github.workspace }}/mlc-llm-source
         run: |
-          # Set NDK compiler path for TVM
           export TVM_NDK_CC=$(find "$ANDROID_NDK_HOME" -name "aarch64-linux-android*-clang" | grep "bin/" | sort | head -n 1)
           NDK_BIN=$(dirname "$TVM_NDK_CC")
           LLVM_AR="$NDK_BIN/llvm-ar"
           if [ -f "$LLVM_AR" ]; then sudo ln -sf "$LLVM_AR" /usr/local/bin/llvm-ar; fi
           
-          # Standard packaging command
           python -m mlc_llm package
+          
+          # DEBUG: See what was actually created
+          echo "=== DIST DIRECTORY CONTENTS ==="
+          ls -R dist/ || echo "dist folder missing!"
 
-      - name: 9. Prepare MLCChat Project
+      - name: 9. Prepare MLCChat Project (With Fallback)
         run: |
-          # Copy the generated config assets to the Android App source
-          cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
+          # Ensure destination exists
+          mkdir -p mlc-llm-source/android/MLCChat/src/main/assets/
+          
+          # Check if the tool generated the config
+          if [ -f "dist/assets/app-config.json" ]; then
+              echo "Tool generated config found. Copying..."
+              cp dist/assets/app-config.json mlc-llm-source/android/MLCChat/src/main/assets/
+          else
+              echo "WARNING: Tool failed to generate app-config.json. Creating manually..."
+              # Manual generation of the required JSON structure
+              cat > mlc-llm-source/android/MLCChat/src/main/assets/app-config.json << 'JSON'
+              {
+                "model_list": [
+                  {
+                    "model_id": "qwen2_5_coder_3b",
+                    "model_lib": "qwen2_5_coder_3b",
+                    "model_url": "https://huggingface.co/mlc-ai/Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC"
+                  }
+                ]
+              }
+              JSON
+          fi
+          
+          # Verify config exists now
+          cat mlc-llm-source/android/MLCChat/src/main/assets/app-config.json
           
           cd mlc-llm-source/android/MLCChat
           
-          # We ONLY inject the AndroidX flag because the repo is old and needs this to compile with modern SDKs.
-          # This is a Gradle requirement, not a source code hack.
+          # Inject AndroidX flags to fix Gradle build
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
@@ -97,8 +119,8 @@ jobs:
       - name: 11. Publish APK
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: ref-app-clean-v${{ github.run_number }}
-          name: Reference App (Clean) ${{ github.run_number }}
+          tag_name: ref-app-robust-v${{ github.run_number }}
+          name: Reference App (Robust) ${{ github.run_number }}
           files: mlc-llm-source/android/MLCChat/app/build/outputs/apk/debug/app-debug.apk
           draft: false
           prerelease: false
