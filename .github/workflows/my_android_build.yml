@@ -68,23 +68,19 @@ jobs:
           
           python -m mlc_llm package
           
-          echo "Generated dist folder at root:"
+          echo "Generated dist folder:"
           ls -R dist/ || echo "dist missing"
 
-      - name: 9. Prepare MLCChat Project (Move Dist)
+      - name: 9. Prepare MLCChat Project
         run: |
-          # CRITICAL FIX: The app expects 'dist' to be inside its folder.
+          # Move dist folder to where the Android project expects it
           echo "Moving dist folder into MLCChat..."
           mv dist mlc-llm-source/android/MLCChat/
-          
-          # Verify move
-          ls -F mlc-llm-source/android/MLCChat/dist/lib/mlc4j/
           
           cd mlc-llm-source/android/MLCChat
           
           # Patch settings.gradle to remove the missing example module
           if [ -f settings.gradle ]; then
-              echo "Patching settings.gradle..."
               sed -i "/mlcengineexample/d" settings.gradle
           fi
           
@@ -92,15 +88,23 @@ jobs:
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
 
-      - name: 10. Build APK
+      - name: 10. Build APK (Force Gradle 8.6)
         working-directory: ./mlc-llm-source/android/MLCChat
         run: |
-          echo "Generating Wrapper..."
-          gradle wrapper --gradle-version 8.5
-          chmod +x gradlew
+          # System Gradle is 9.2 (Too new), so we manually install 8.6
+          echo "Downloading Gradle 8.6..."
+          wget -q https://services.gradle.org/distributions/gradle-8.6-bin.zip
+          unzip -q gradle-8.6-bin.zip
+          
+          # Set up environment
+          export PATH=$PWD/gradle-8.6/bin:$PATH
+          
+          echo "Verifying Gradle Version:"
+          gradle -v
           
           echo "Building Debug APK..."
-          ./gradlew assembleDebug --stacktrace
+          # Run without daemon to save memory
+          gradle assembleDebug --no-daemon --stacktrace
 
       - name: 11. Publish APK
         uses: softprops/action-gh-release@v1
