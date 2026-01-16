@@ -68,7 +68,6 @@ jobs:
           
           python -m mlc_llm package
           
-          echo "Generated dist folder:"
           ls -R dist/ || echo "dist missing"
 
       - name: 9. Prepare MLCChat Project
@@ -84,11 +83,12 @@ jobs:
               sed -i "/mlcengineexample/d" settings.gradle
           fi
           
-          # Inject AndroidX flags
+          # Inject AndroidX flags AND Memory Settings
           echo "android.useAndroidX=true" > gradle.properties
           echo "android.enableJetifier=true" >> gradle.properties
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
 
-      - name: 10. Build APK (Force Gradle 8.6)
+      - name: 10. Build APK (Force Gradle 8.6 + RAM)
         working-directory: ./mlc-llm-source/android/MLCChat
         run: |
           # System Gradle is 9.2 (Too new), so we manually install 8.6
@@ -99,12 +99,8 @@ jobs:
           # Set up environment
           export PATH=$PWD/gradle-8.6/bin:$PATH
           
-          echo "Verifying Gradle Version:"
-          gradle -v
-          
-          echo "Building Debug APK..."
-          # Run without daemon to save memory
-          gradle assembleDebug --no-daemon --stacktrace
+          echo "Building Debug APK with Increased Memory..."
+          gradle assembleDebug -Dorg.gradle.jvmargs=-Xmx4g --stacktrace
 
       - name: 11. Publish APK
         uses: softprops/action-gh-release@v1
