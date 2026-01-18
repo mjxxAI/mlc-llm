@@ -1,4 +1,4 @@
-name: Build Qwen2.5 Lib (Python 3.10 Fix)
+name: Build Qwen2.5 Lib (No Prefix Fix)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
       - name: 3. Setup Python 3.10
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # CRITICAL: Fixes the ffi.SmallStr TypeError found in 3.11
+          python-version: '3.10'
 
       - name: 4. Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -29,43 +29,37 @@ jobs:
 
       - name: 5. Install MLC (CPU Wheels)
         run: |
-          # We use the CPU wheels because they install reliably on GitHub Runners
-          # and we only need them for compilation (not inference).
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 6. Compile Model Objects
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
-          # Clone Config Only
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # Compile using python module syntax
-          # We keep the prefix 'qwen2' so NeuralService can find it
+          # REMOVED --system-lib-prefix to bypass ffi.SmallStr crash
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
-            --system-lib-prefix qwen2 \
             --output qwen2_android.tar
 
-      - name: 7. Link Shared Library (NDK)
+      - name: 7. Link Shared Library & Check Symbols
         run: |
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
-          # Locate NDK Clang
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
-          
-          if [ -z "$CLANG" ]; then
-            echo "Error: Clang not found!"
-            exit 1
-          fi
-          echo "Using Compiler: $CLANG"
           
           # Link
           cd build_libs
           $CLANG -shared -fPIC -o libqwen2.so *.o
+          
+          echo "============================================"
+          echo "🔎 INSPECTING GENERATED SYMBOLS"
+          echo "Look for this value in the logs below to set as your 'model_lib' in config:"
+          nm -D libqwen2.so | grep "tvm_module_ctx" | sed 's/__tvm_module_ctx//'
+          echo "============================================"
 
       - name: 8. Upload Artifact
         uses: actions/upload-artifact@v4
