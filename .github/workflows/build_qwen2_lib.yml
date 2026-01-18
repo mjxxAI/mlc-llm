@@ -1,4 +1,4 @@
-name: Build Qwen2.5-Coder Lib (Fixed)
+name: Build Qwen2.5-Coder Lib (Final Fix)
 
 on:
   workflow_dispatch:
@@ -28,18 +28,18 @@ jobs:
           ndk-version: r27b
 
       - name: 5. Install MLC (CPU Version)
-        # Using CPU wheels avoids the installation error on GitHub Runners
         run: |
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 6. Compile Model Objects
+        env:
+          GIT_LFS_SKIP_SMUDGE: 1 # Skip downloading heavy weights
         run: |
-          # Clone just the config (lightweight)
+          # Clone just the config (lightweight due to LFS skip)
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # Compile architecture to object files
-          # --system-lib-prefix qwen2: This matches what we put in NeuralService.kt
-          mlc_llm compile ./model_config \
+          # Compile using 'python -m mlc_llm' to ensure command is found
+          python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
             --system-lib-prefix qwen2 \
@@ -47,12 +47,10 @@ jobs:
 
       - name: 7. Link Shared Library (NDK)
         run: |
-          # Extract object files
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
-          # Find the NDK Clang Compiler
-          # The setup-ndk action sets ANDROID_NDK_HOME
+          # Find NDK Clang
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
           
@@ -62,7 +60,7 @@ jobs:
           fi
           echo "Using Compiler: $CLANG"
           
-          # Link to .so
+          # Link
           cd build_libs
           $CLANG -shared -fPIC -o libqwen2.so *.o
 
