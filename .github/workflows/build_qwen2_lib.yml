@@ -1,4 +1,4 @@
-name: Build Qwen2.5 Lib (Conda Stable)
+name: Build Qwen2.5 Lib (Python 3.10 Fix)
 
 on:
   workflow_dispatch:
@@ -6,9 +6,6 @@ on:
 jobs:
   build_lib:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash -l {0} # Required for Conda environment activation
     steps:
       - name: 1. Maximize Disk Space
         run: |
@@ -20,36 +17,31 @@ jobs:
       - name: 2. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 3. Setup Miniconda
-        uses: conda-incubator/setup-miniconda@v3
+      - name: 3. Setup Python 3.10
+        uses: actions/setup-python@v5
         with:
-          auto-update-conda: true
-          python-version: "3.10" # Python 3.10 is more stable for TVM FFI than 3.11
-          activate-environment: mlc-env
+          python-version: '3.10' # CRITICAL: Fixes the ffi.SmallStr TypeError found in 3.11
 
-      - name: 4. Install MLC-LLM (Conda Nightly)
-        run: |
-          # Install from mlc-ai nightly channel
-          conda install -c mlc-ai -c conda-forge \
-            mlc-llm-nightly \
-            tvm-nightly \
-            git-lfs \
-            python=3.10
-
-      - name: 5. Setup Android NDK
+      - name: 4. Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27b
+
+      - name: 5. Install MLC (CPU Wheels)
+        run: |
+          # We use the CPU wheels because they install reliably on GitHub Runners
+          # and we only need them for compilation (not inference).
+          pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 6. Compile Model Objects
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
-          # Clone Config
+          # Clone Config Only
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # Compile
-          # We run this inside the conda environment
+          # Compile using python module syntax
+          # We keep the prefix 'qwen2' so NeuralService can find it
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
