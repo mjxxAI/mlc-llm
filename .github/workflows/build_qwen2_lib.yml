@@ -1,63 +1,72 @@
-name: Build Qwen2.5-Coder Lib for Android
+name: Build Qwen2.5-Coder Lib (Fixed)
 
 on:
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch:
 
 jobs:
-  compile_lib:
+  build_lib:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 1. Maximize Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/share/swift
+          docker rmi $(docker images -q) 2>/dev/null || true
+
+      - name: 2. Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 3. Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install MLC-LLM & TVM
-        run: |
-          # Install the nightly build which supports the latest Qwen architecture
-          pip install --pre --force-reinstall mlc-ai-nightly mlc-llm-nightly -f https://mlc.ai/wheels
+      - name: 4. Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
 
-      - name: Compile Model Object Files
+      - name: 5. Install MLC (CPU Version)
+        # Using CPU wheels avoids the installation error on GitHub Runners
         run: |
-          # 1. We don't need the heavy weights, just the config to define architecture.
-          #    We clone the repo to get the JSON config.
+          pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
+
+      - name: 6. Compile Model Objects
+        run: |
+          # Clone just the config (lightweight)
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # 2. Compile!
-          #    --device android: Targets Vulkan/OpenCL for Android
-          #    --system-lib-prefix qwen2: Sets the symbol prefix to "qwen2_" (Simple and clean)
+          # Compile architecture to object files
+          # --system-lib-prefix qwen2: This matches what we put in NeuralService.kt
           mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
             --system-lib-prefix qwen2 \
             --output qwen2_android.tar
 
-      - name: Link Shared Library (NDK)
+      - name: 7. Link Shared Library (NDK)
         run: |
-          # 1. Extract the object files (.o) from the tar
+          # Extract object files
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
-          # 2. Find the Android NDK Clang compiler
-          #    GitHub Runners have NDK installed at $ANDROID_NDK_HOME
+          # Find the NDK Clang Compiler
+          # The setup-ndk action sets ANDROID_NDK_HOME
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CLANG="$NDK_TOOLCHAIN/aarch64-linux-android*-clang"
+          CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
           
-          #    Resolve wildcard to actual path
-          COMPILER=$(ls $CLANG | head -n 1)
-          echo "Using Compiler: $COMPILER"
+          if [ -z "$CLANG" ]; then
+            echo "Error: Clang not found!"
+            exit 1
+          fi
+          echo "Using Compiler: $CLANG"
           
-          # 3. Link objects into shared library (.so)
-          #    -shared: Make a dynamic lib
-          #    -fPIC: Position Independent Code
-          #    -o libqwen2.so: The output filename
+          # Link to .so
           cd build_libs
-          $COMPILER -shared -fPIC -o libqwen2.so *.o
+          $CLANG -shared -fPIC -o libqwen2.so *.o
 
-      - name: Upload Artifact
+      - name: 8. Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libqwen2.so
