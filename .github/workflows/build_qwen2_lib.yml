@@ -1,0 +1,64 @@
+name: Build Qwen2.5-Coder Lib for Android
+
+on:
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  compile_lib:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install MLC-LLM & TVM
+        run: |
+          # Install the nightly build which supports the latest Qwen architecture
+          pip install --pre --force-reinstall mlc-ai-nightly mlc-llm-nightly -f https://mlc.ai/wheels
+
+      - name: Compile Model Object Files
+        run: |
+          # 1. We don't need the heavy weights, just the config to define architecture.
+          #    We clone the repo to get the JSON config.
+          git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
+          
+          # 2. Compile!
+          #    --device android: Targets Vulkan/OpenCL for Android
+          #    --system-lib-prefix qwen2: Sets the symbol prefix to "qwen2_" (Simple and clean)
+          mlc_llm compile ./model_config \
+            --quantization q4f16_1 \
+            --device android \
+            --system-lib-prefix qwen2 \
+            --output qwen2_android.tar
+
+      - name: Link Shared Library (NDK)
+        run: |
+          # 1. Extract the object files (.o) from the tar
+          mkdir build_libs
+          tar -xf qwen2_android.tar -C build_libs
+          
+          # 2. Find the Android NDK Clang compiler
+          #    GitHub Runners have NDK installed at $ANDROID_NDK_HOME
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CLANG="$NDK_TOOLCHAIN/aarch64-linux-android*-clang"
+          
+          #    Resolve wildcard to actual path
+          COMPILER=$(ls $CLANG | head -n 1)
+          echo "Using Compiler: $COMPILER"
+          
+          # 3. Link objects into shared library (.so)
+          #    -shared: Make a dynamic lib
+          #    -fPIC: Position Independent Code
+          #    -o libqwen2.so: The output filename
+          cd build_libs
+          $COMPILER -shared -fPIC -o libqwen2.so *.o
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libqwen2.so
+          path: build_libs/libqwen2.so
