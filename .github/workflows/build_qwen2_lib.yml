@@ -1,4 +1,4 @@
-name: Build Qwen2.5-Coder Lib (Final Fix)
+name: Build Qwen2.5-Coder Lib (Docker Fix)
 
 on:
   workflow_dispatch:
@@ -6,65 +6,50 @@ on:
 jobs:
   build_lib:
     runs-on: ubuntu-latest
+    container:
+      image: mlcai/mlc-llm-build:latest
     steps:
-      - name: 1. Maximize Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/share/swift
-          docker rmi $(docker images -q) 2>/dev/null || true
-
-      - name: 2. Checkout Repo
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: 3. Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: 4. Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27b
-
-      - name: 5. Install MLC (CPU Version)
+      - name: Prepare Model Config
         run: |
-          pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
-
-      - name: 6. Compile Model Objects
-        env:
-          GIT_LFS_SKIP_SMUDGE: 1 # Skip downloading heavy weights
-        run: |
-          # Clone just the config (lightweight due to LFS skip)
+          # Clone just the config (lightweight)
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
-          
-          # Compile using 'python -m mlc_llm' to ensure command is found
-          python -m mlc_llm compile ./model_config \
+
+      - name: Compile Model Objects
+        run: |
+          # The container has mlc_llm installed globally
+          # We use --device android to target Vulkan/OpenCL
+          mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
             --system-lib-prefix qwen2 \
             --output qwen2_android.tar
 
-      - name: 7. Link Shared Library (NDK)
+      - name: Link Shared Library
         run: |
+          # The container also has the NDK installed
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
-          # Find NDK Clang
-          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
+          # Locate Compiler in Docker env
+          # Usually at /android-ndk or similar
+          # We search for it to be safe
+          CLANG=$(find / -name "aarch64-linux-android*-clang" 2>/dev/null | head -n 1)
           
           if [ -z "$CLANG" ]; then
-            echo "Error: Clang not found!"
-            exit 1
+             echo "Clang not found, falling back to apt install"
+             apt-get update && apt-get install -y clang
+             CLANG="clang --target=aarch64-linux-android24"
           fi
+          
           echo "Using Compiler: $CLANG"
           
-          # Link
           cd build_libs
           $CLANG -shared -fPIC -o libqwen2.so *.o
 
-      - name: 8. Upload Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libqwen2.so
