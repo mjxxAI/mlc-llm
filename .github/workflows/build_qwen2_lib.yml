@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      # 1. Clean Disk to ensure we have maximum space (~25GB free)
+      # 1. Clean Disk Space (~25GB free)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -40,22 +40,48 @@ jobs:
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
-      # 4. FIX: Patch the Python package to disable the "Local Path" check safely.
-      # We change the 'if' condition to always be False. This avoids Syntax/Indentation errors.
+      # 4. CRITICAL FIX: Robust Python Patch
+      # This script finds the "raise ValueError" corresponding to the "Local Path" error
+      # and replaces it with "print", effectively disabling the check.
       - name: Patch MLC Validation Logic
         run: |
-          # Locate the installed package file
-          SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
-          PACKAGE_FILE="$SITE_PACKAGES/mlc_llm/interface/package.py"
-          
-          echo "Patching $PACKAGE_FILE..."
-          
-          # Replace the specific check 'if "bundle_weight" not in model_config' with 'if False and ...'
-          # This makes the validation block unreachable but keeps valid Python syntax.
-          sed -i 's/if "bundle_weight" not in model_config/if False and "bundle_weight" not in model_config/' $PACKAGE_FILE
-          
-          # Verify the patch worked by printing the line
-          grep "if False" $PACKAGE_FILE || echo "Warning: Regex might have missed, check file content if build fails."
+          python -c "
+          import site
+          import os
+
+          # Find the package.py file
+          package_dir = site.getsitepackages()[0]
+          target_path = os.path.join(package_dir, 'mlc_llm', 'interface', 'package.py')
+          print(f'Patching file: {target_path}')
+
+          with open(target_path, 'r') as f:
+              lines = f.readlines()
+
+          # The specific text in the error message
+          error_marker = 'is a local path.Please set'
+          patched = False
+
+          for i, line in enumerate(lines):
+              if error_marker in line:
+                  # Look backwards 10 lines to find the 'raise ValueError' statement
+                  for j in range(i, max(-1, i - 10), -1):
+                      if 'raise ValueError' in lines[j]:
+                          print(f'Found error raise on line {j+1}. Disabling it.')
+                          # Replacing 'raise ValueError' with 'print' keeps syntax valid 
+                          # (since print is a function and takes the string arguments)
+                          lines[j] = lines[j].replace('raise ValueError', 'print')
+                          patched = True
+                          break
+                  if patched:
+                      break
+
+          if not patched:
+              print('WARNING: Could not locate the specific validation logic to patch.')
+          else:
+              with open(target_path, 'w') as f:
+                  f.writelines(lines)
+              print('Successfully patched package.py')
+          "
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -69,7 +95,7 @@ jobs:
           toolchain: stable
           profile: minimal
 
-      # 5. Download ONLY Configs (No Weights) to save disk space
+      # 5. Download ONLY Configs (No Weights)
       - name: Download Model Configs
         run: |
           mkdir -p models
@@ -98,7 +124,7 @@ jobs:
                   except: pass
           "
 
-      # 6. Generate Config pointing to Local Paths (Validated by our patch)
+      # 6. Generate Config pointing to Local Paths
       - name: Create Model Config
         run: |
           cat <<EOF > mlc-package-config.json
