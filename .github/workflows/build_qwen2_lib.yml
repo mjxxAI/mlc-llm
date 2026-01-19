@@ -141,6 +141,21 @@ jobs:
             ]
           }
           EOF
+                # 6½. Patch memory settings into every config
+      - name: Patch Configs for Low-VRAM
+        run: |
+          python -c "
+          import json, glob, os
+          for cfg_path in glob.glob('models/**/mlc-chat-config.json', recursive=True):
+              print('Patching', cfg_path)
+              with open(cfg_path, 'r', encoding='utf-8') as f:
+                  cfg = json.load(f)
+              cfg['prefill_chunk_size'] = 128
+              cfg['temporary_buffer_size_mb'] = 1800   # <-- key line
+              cfg['gpu_memory_utilization'] = 0.99
+              with open(cfg_path, 'w', encoding='utf-8') as f:
+                  json.dump(cfg, f, indent=2, ensure_ascii=False)
+          "
 
       # 7. Compile
       - name: Compile Runtime Libraries
