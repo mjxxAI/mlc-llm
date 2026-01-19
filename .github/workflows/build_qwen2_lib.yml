@@ -1,10 +1,10 @@
-name: Build Qwen2.5 Lib (Verified)
+name: Build MLC Complete (Runtime + Model)
 
 on:
   workflow_dispatch:
 
 jobs:
-  build_lib:
+  build_all:
     runs-on: ubuntu-latest
     steps:
       - name: 1. Maximize Disk Space
@@ -14,84 +14,84 @@ jobs:
           sudo rm -rf /usr/share/swift
           docker rmi $(docker images -q) 2>/dev/null || true
 
-      - name: 2. Checkout Repo
+      - name: 2. Checkout MLC-LLM Source (Recursive)
         uses: actions/checkout@v4
+        with:
+          repository: mlc-ai/mlc-llm
+          submodules: recursive
 
-      - name: 3. Setup Python 3.10
+      - name: 3. Setup Java (JDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 4. Setup Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 4. Setup Android NDK
+      - name: 5. Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27b
 
-      - name: 5. Install MLC (Nightly CPU)
+      - name: 6. Install Build Dependencies
         run: |
-          # We need Nightly for Qwen2.5 support
+          # Install Rust (required for Tokenizer build)
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
+          
+          # Install Python Deps
+          pip install --no-cache-dir numpy decorator psutil scipy tornado cloudpickle git-lfs
+          
+          # Install MLC Nightly (CPU) for compilation tools
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
-      - name: 6. Compile Model Objects
+      - name: 7. Build Android Runtime (AAR)
+        run: |
+          # This builds the mlc4j.aar from source, including libtvm4j_runtime_packed.so
+          cd android
+          
+          # Use the environment variables required by the build script
+          export TVM_HOME=$(pwd)/../3rdparty/tvm
+          export MLC_LLM_HOME=$(pwd)/..
+          
+          echo "Building MLC4J Android Library..."
+          ./gradlew :mlc4j:assembleRelease
+          
+          echo "AAR Build Complete."
+
+      - name: 8. Compile Model Library (libqwen2.so)
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
+          # Clone Qwen2.5 Config
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # COMPILE WITHOUT PREFIX
-          # This avoids the 'SmallStr' crash bug in the current nightly build.
-          # The compiler will default to a symbol name based on the config.
+          # Compile using the same mlc_llm tools we just installed
+          # We use "qwen2" as the prefix. Since we are building the Runtime too, 
+          # we can be sure they will agree on the symbol format.
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
+            --system-lib-prefix qwen2 \
             --output qwen2_android.tar
-
-      - name: 7. Standardize Symbols & Link
-        run: |
+            
+          # Link to .so
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
+          
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
+          
           cd build_libs
-          
-          # 1. Locate NDK Tools
-          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CLANG=$(find "$NDK_BIN" -name "aarch64-linux-android*-clang" | head -n 1)
-          OBJCOPY=$(find "$NDK_BIN" -name "llvm-objcopy" | head -n 1)
-          
-          echo "Using Compiler: $CLANG"
-          
-          # 2. IDENTIFY GENERATED SYMBOL
-          # We extract the symbol name from the first object file.
-          # It usually looks like: qwen2_q4f16_1_...___tvm_ffi__library_ctx
-          RAW_SYMBOL=$(nm *.o | grep "tvm_ffi__library_ctx" | head -n 1 | awk '{print $3}')
-          
-          if [ -z "$RAW_SYMBOL" ]; then
-             echo "Could not find FFI symbol. Trying old style..."
-             RAW_SYMBOL=$(nm *.o | grep "tvm_module_ctx" | head -n 1 | awk '{print $3}')
-          fi
-          
-          echo "Found Raw Symbol: $RAW_SYMBOL"
-          
-          # 3. RENAME TO STANDARD
-          # We force it to be 'qwen2___tvm_module_ctx' so your Android Config is simple.
-          TARGET_SYMBOL="qwen2___tvm_module_ctx"
-          
-          if [ "$RAW_SYMBOL" != "$TARGET_SYMBOL" ]; then
-             echo "Renaming $RAW_SYMBOL -> $TARGET_SYMBOL"
-             for obj in *.o; do
-               "$OBJCOPY" --redefine-sym "$RAW_SYMBOL=$TARGET_SYMBOL" "$obj"
-             done
-          else
-             echo "Symbol already matches standard."
-          fi
-          
-          # 4. LINK
           $CLANG -shared -fPIC -o libqwen2.so *.o
-          
-          # Final Verification
-          nm -D libqwen2.so | grep "tvm_module_ctx"
 
-      - name: 8. Upload Artifact
+      - name: 9. Upload Artifacts (AAR + SO)
         uses: actions/upload-artifact@v4
         with:
-          name: libqwen2.so
-          path: build_libs/libqwen2.so
+          name: mlc-dist-pkg
+          path: |
+            android/mlc4j/build/outputs/aar/mlc4j-release.aar
+            build_libs/libqwen2.so
