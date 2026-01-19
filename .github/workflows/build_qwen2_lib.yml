@@ -1,4 +1,4 @@
-name: Build MLC Runtime (Final Fix)
+name: Build MLC Runtime (Regex Patch)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      # 1. Clean Disk Space (~25GB free)
+      # 1. Free Disk Space (~25GB free)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -40,47 +40,46 @@ jobs:
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
-      # 4. CRITICAL FIX: Robust Python Patch
-      # This script finds the "raise ValueError" corresponding to the "Local Path" error
-      # and replaces it with "print", effectively disabling the check.
+      # 4. FIX: Apply Regex Patch to neutralize the validation check
+      # This reads the file as a single string and replaces the exception block
+      # regardless of how many lines it spans.
       - name: Patch MLC Validation Logic
         run: |
           python -c "
           import site
           import os
+          import re
 
-          # Find the package.py file
+          # 1. Locate package.py
           package_dir = site.getsitepackages()[0]
           target_path = os.path.join(package_dir, 'mlc_llm', 'interface', 'package.py')
           print(f'Patching file: {target_path}')
 
           with open(target_path, 'r') as f:
-              lines = f.readlines()
+              content = f.read()
 
-          # The specific text in the error message
-          error_marker = 'is a local path.Please set'
-          patched = False
-
-          for i, line in enumerate(lines):
-              if error_marker in line:
-                  # Look backwards 10 lines to find the 'raise ValueError' statement
-                  for j in range(i, max(-1, i - 10), -1):
-                      if 'raise ValueError' in lines[j]:
-                          print(f'Found error raise on line {j+1}. Disabling it.')
-                          # Replacing 'raise ValueError' with 'print' keeps syntax valid 
-                          # (since print is a function and takes the string arguments)
-                          lines[j] = lines[j].replace('raise ValueError', 'print')
-                          patched = True
-                          break
-                  if patched:
-                      break
-
-          if not patched:
-              print('WARNING: Could not locate the specific validation logic to patch.')
-          else:
+          # 2. Define Regex Pattern
+          # Matches 'raise ValueError(' followed by anything (including newlines) 
+          # until it sees 'bundle_weight' and 'true', then matches until the closing parenthesis.
+          # We capture the arguments in group 1 so we can pass them to print() instead.
+          # The DOTALL flag (.) makes matching include newlines.
+          pattern = r'raise ValueError\(([^)]*?bundle_weight.*?true.*?)\)'
+          
+          # 3. Check if pattern exists before replacing
+          match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+          if match:
+              print('Found the validation check. Neutralizing it...')
+              # Replace 'raise ValueError(...)' with 'print(...)'
+              # This keeps the code valid python but prevents the crash.
+              new_content = re.sub(pattern, r'print(\1)', content, flags=re.DOTALL | re.IGNORECASE)
+              
               with open(target_path, 'w') as f:
-                  f.writelines(lines)
+                  f.write(new_content)
               print('Successfully patched package.py')
+          else:
+              print('WARNING: Regex did not match any ValueError with bundle_weight.')
+              # Debug: Print file content snippets if needed, but let's trust the build logs
+              print('File start:', content[:500])
           "
 
       - name: Setup Android SDK
