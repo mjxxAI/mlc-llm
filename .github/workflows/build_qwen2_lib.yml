@@ -109,7 +109,7 @@ jobs:
           TVM_NDK_CC: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: |
           # This command compiles the C++ kernels for all 8 models into one library
-          mlc_llm package
+          python -m mlc_llm package
 
       # Upload the JNI libraries (.so) and the Generated Java code
       - name: Upload Artifacts
