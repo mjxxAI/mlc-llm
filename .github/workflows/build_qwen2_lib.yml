@@ -1,4 +1,4 @@
-name: Build MLC Complete (Runtime + Model)
+name: Build MLC Complete (Fix)
 
 on:
   workflow_dispatch:
@@ -14,13 +14,13 @@ jobs:
           sudo rm -rf /usr/share/swift
           docker rmi $(docker images -q) 2>/dev/null || true
 
-      - name: 2. Checkout MLC-LLM Source (Recursive)
+      - name: 2. Checkout MLC-LLM Source
         uses: actions/checkout@v4
         with:
           repository: mlc-ai/mlc-llm
           submodules: recursive
 
-      - name: 3. Setup Java (JDK 17)
+      - name: 3. Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -38,47 +38,38 @@ jobs:
 
       - name: 6. Install Build Dependencies
         run: |
-          # Install Rust (required for Tokenizer build)
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
-          
-          # Install Python Deps
           pip install --no-cache-dir numpy decorator psutil scipy tornado cloudpickle git-lfs
-          
-          # Install MLC Nightly (CPU) for compilation tools
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 7. Build Android Runtime (AAR)
         run: |
-          # This builds the mlc4j.aar from source, including libtvm4j_runtime_packed.so
           cd android
-          
-          # Use the environment variables required by the build script
           export TVM_HOME=$(pwd)/../3rdparty/tvm
           export MLC_LLM_HOME=$(pwd)/..
           
+          # Initialize Gradle Wrapper if missing
+          gradle wrapper
+          
+          # Make executable
+          chmod +x gradlew
+          
           echo "Building MLC4J Android Library..."
           ./gradlew :mlc4j:assembleRelease
-          
-          echo "AAR Build Complete."
 
       - name: 8. Compile Model Library (libqwen2.so)
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
-          # Clone Qwen2.5 Config
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # Compile using the same mlc_llm tools we just installed
-          # We use "qwen2" as the prefix. Since we are building the Runtime too, 
-          # we can be sure they will agree on the symbol format.
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
             --system-lib-prefix qwen2 \
             --output qwen2_android.tar
             
-          # Link to .so
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
@@ -88,7 +79,7 @@ jobs:
           cd build_libs
           $CLANG -shared -fPIC -o libqwen2.so *.o
 
-      - name: 9. Upload Artifacts (AAR + SO)
+      - name: 9. Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mlc-dist-pkg
