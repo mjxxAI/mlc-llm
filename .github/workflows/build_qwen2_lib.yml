@@ -1,4 +1,4 @@
-name: Build Qwen2.5 Lib (Symbol Renaming Fix)
+name: Build Qwen2.5 Lib (Verified)
 
 on:
   workflow_dispatch:
@@ -27,52 +27,67 @@ jobs:
         with:
           ndk-version: r27b
 
-      - name: 5. Install MLC
+      - name: 5. Install MLC (Nightly CPU)
         run: |
+          # We need Nightly for Qwen2.5 support
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 6. Compile Model Objects
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
-          # Clone Config Only
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # Compile with prefix 'qwen2'
-          # This generates symbols like: qwen2___tvm_ffi__library_ctx
+          # COMPILE WITHOUT PREFIX
+          # This avoids the 'SmallStr' crash bug in the current nightly build.
+          # The compiler will default to a symbol name based on the config.
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
-            --system-lib-prefix qwen2 \
             --output qwen2_android.tar
 
-      - name: 7. Rename Symbols & Link
+      - name: 7. Standardize Symbols & Link
         run: |
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           cd build_libs
           
-          # Locate NDK Tools
+          # 1. Locate NDK Tools
           NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CLANG=$(find "$NDK_BIN" -name "aarch64-linux-android*-clang" | head -n 1)
           OBJCOPY=$(find "$NDK_BIN" -name "llvm-objcopy" | head -n 1)
           
           echo "Using Compiler: $CLANG"
-          echo "Using ObjCopy: $OBJCOPY"
           
-          # --- THE MAGIC FIX ---
-          # Rename the "New Style" symbol to the "Old Style" symbol your app expects.
-          # We rename it in every object file (.o) extracted from the tar.
+          # 2. IDENTIFY GENERATED SYMBOL
+          # We extract the symbol name from the first object file.
+          # It usually looks like: qwen2_q4f16_1_...___tvm_ffi__library_ctx
+          RAW_SYMBOL=$(nm *.o | grep "tvm_ffi__library_ctx" | head -n 1 | awk '{print $3}')
           
-          for obj in *.o; do
-             "$OBJCOPY" --redefine-sym qwen2___tvm_ffi__library_ctx=qwen2___tvm_module_ctx "$obj"
-          done
+          if [ -z "$RAW_SYMBOL" ]; then
+             echo "Could not find FFI symbol. Trying old style..."
+             RAW_SYMBOL=$(nm *.o | grep "tvm_module_ctx" | head -n 1 | awk '{print $3}')
+          fi
           
-          # Link into shared library
+          echo "Found Raw Symbol: $RAW_SYMBOL"
+          
+          # 3. RENAME TO STANDARD
+          # We force it to be 'qwen2___tvm_module_ctx' so your Android Config is simple.
+          TARGET_SYMBOL="qwen2___tvm_module_ctx"
+          
+          if [ "$RAW_SYMBOL" != "$TARGET_SYMBOL" ]; then
+             echo "Renaming $RAW_SYMBOL -> $TARGET_SYMBOL"
+             for obj in *.o; do
+               "$OBJCOPY" --redefine-sym "$RAW_SYMBOL=$TARGET_SYMBOL" "$obj"
+             done
+          else
+             echo "Symbol already matches standard."
+          fi
+          
+          # 4. LINK
           $CLANG -shared -fPIC -o libqwen2.so *.o
           
-          # Verify the fix
-          echo "🔎 Verifying symbols in libqwen2.so..."
+          # Final Verification
           nm -D libqwen2.so | grep "tvm_module_ctx"
 
       - name: 8. Upload Artifact
