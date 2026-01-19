@@ -1,7 +1,7 @@
 name: Build MLC Runtime (.so)
 
 on:
-  workflow_dispatch: # Allows you to click "Run" manually
+  workflow_dispatch:
 
 jobs:
   build-libs:
@@ -9,42 +9,49 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # 1. Checkout your repo (Just to have a workspace)
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
+      # 2. Clone Official MLC-LLM Source (REQUIRED for the build logic)
+      # We clone this into a folder named 'mlc-source' so the builder can find the Android C++ files.
+      - name: Clone MLC-LLM Source
+        run: git clone --recursive https://github.com/mlc-ai/mlc-llm.git mlc-source
+
+      # 3. Setup Java 17
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
+      # 4. Setup Python 3.11
       - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Install Nightly to support Gemma-3 / Qwen-3
+      # 5. Install MLC-LLM Nightly
       - name: Install MLC-LLM Nightly
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
-          python -c "import mlc_llm; print('MLC installed version:', mlc_llm.__version__)"
+          python -c "import mlc_llm; print('MLC version:', mlc_llm.__version__)"
 
-      - name: Setup Android NDK
-        # Standard GitHub runners have NDK, but we ensure the path is set
+      # 6. Setup Android SDK & NDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install NDK & CMake
         run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
+      # 7. Setup Rust
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
 
-      # This step injects your SPECIFIC 8 models into the config
+      # 8. Create Model Config
       - name: Create Model Config
         run: |
           cat <<EOF > mlc-package-config.json
@@ -103,15 +110,19 @@ jobs:
           }
           EOF
 
+      # 9. Compile Runtime Libraries
+      # FIXES APPLIED:
+      # 1. Added MLC_LLM_SOURCE_DIR pointing to the cloned 'mlc-source' folder.
+      # 2. Using 'python -m mlc_llm' to ensure execution.
       - name: Compile Runtime Libraries (.so)
         env:
+          MLC_LLM_SOURCE_DIR: ${{ github.workspace }}/mlc-source
           ANDROID_NDK: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
           TVM_NDK_CC: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
         run: |
-          # This command compiles the C++ kernels for all 8 models into one library
           python -m mlc_llm package
 
-      # Upload the JNI libraries (.so) and the Generated Java code
+      # 10. Upload Artifacts
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
