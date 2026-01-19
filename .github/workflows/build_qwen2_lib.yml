@@ -1,4 +1,4 @@
-name: Build Qwen2.5 Lib (No Prefix Fix)
+name: Build Qwen2.5 Lib (Symbol Renaming Fix)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ jobs:
         with:
           ndk-version: r27b
 
-      - name: 5. Install MLC (CPU Wheels)
+      - name: 5. Install MLC
         run: |
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
@@ -35,31 +35,45 @@ jobs:
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
+          # Clone Config Only
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
-          # REMOVED --system-lib-prefix to bypass ffi.SmallStr crash
+          # Compile with prefix 'qwen2'
+          # This generates symbols like: qwen2___tvm_ffi__library_ctx
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
+            --system-lib-prefix qwen2 \
             --output qwen2_android.tar
 
-      - name: 7. Link Shared Library & Check Symbols
+      - name: 7. Rename Symbols & Link
         run: |
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
-          
-          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          CLANG=$(find "$NDK_TOOLCHAIN" -name "aarch64-linux-android*-clang" | head -n 1)
-          
-          # Link
           cd build_libs
+          
+          # Locate NDK Tools
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          CLANG=$(find "$NDK_BIN" -name "aarch64-linux-android*-clang" | head -n 1)
+          OBJCOPY=$(find "$NDK_BIN" -name "llvm-objcopy" | head -n 1)
+          
+          echo "Using Compiler: $CLANG"
+          echo "Using ObjCopy: $OBJCOPY"
+          
+          # --- THE MAGIC FIX ---
+          # Rename the "New Style" symbol to the "Old Style" symbol your app expects.
+          # We rename it in every object file (.o) extracted from the tar.
+          
+          for obj in *.o; do
+             "$OBJCOPY" --redefine-sym qwen2___tvm_ffi__library_ctx=qwen2___tvm_module_ctx "$obj"
+          done
+          
+          # Link into shared library
           $CLANG -shared -fPIC -o libqwen2.so *.o
           
-          echo "============================================"
-          echo "🔎 INSPECTING GENERATED SYMBOLS"
-          echo "Look for this value in the logs below to set as your 'model_lib' in config:"
-          nm -D libqwen2.so | grep "tvm_module_ctx" | sed 's/__tvm_module_ctx//'
-          echo "============================================"
+          # Verify the fix
+          echo "🔎 Verifying symbols in libqwen2.so..."
+          nm -D libqwen2.so | grep "tvm_module_ctx"
 
       - name: 8. Upload Artifact
         uses: actions/upload-artifact@v4
