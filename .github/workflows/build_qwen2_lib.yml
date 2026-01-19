@@ -1,4 +1,4 @@
-name: Build MLC Complete (Fix)
+name: Build MLC Complete (Runtime + Model)
 
 on:
   workflow_dispatch:
@@ -38,9 +38,15 @@ jobs:
 
       - name: 6. Install Build Dependencies
         run: |
+          # Rust is required for tokenizer compilation in the AAR
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source $HOME/.cargo/env
+          
+          # Python deps
           pip install --no-cache-dir numpy decorator psutil scipy tornado cloudpickle git-lfs
+          
+          # Install MLC Nightly Tools (CPU)
+          # We use this to compile the .so file
           pip install --no-cache-dir --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       - name: 7. Build Android Runtime (AAR)
@@ -49,27 +55,30 @@ jobs:
           export TVM_HOME=$(pwd)/../3rdparty/tvm
           export MLC_LLM_HOME=$(pwd)/..
           
-          # Initialize Gradle Wrapper if missing
-          gradle wrapper
+          echo "Listing android directory to debug:"
+          ls -la
           
-          # Make executable
-          chmod +x gradlew
-          
-          echo "Building MLC4J Android Library..."
-          ./gradlew :mlc4j:assembleRelease
+          # FIX: If gradlew is missing or not executable, use global gradle
+          # The :mlc4j:assembleRelease task builds the AAR and the included libtvm4j_runtime_packed.so
+          gradle :mlc4j:assembleRelease --no-daemon
 
       - name: 8. Compile Model Library (libqwen2.so)
         env:
           GIT_LFS_SKIP_SMUDGE: 1
         run: |
+          # 1. Get Config
           git clone https://huggingface.co/mlc-ai/Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC model_config
           
+          # 2. Compile
+          # We use the prefix "qwen2".
+          # Since we are building the AAR from nightly source, it will natively understand the nightly symbol format.
           python -m mlc_llm compile ./model_config \
             --quantization q4f16_1 \
             --device android \
             --system-lib-prefix qwen2 \
             --output qwen2_android.tar
             
+          # 3. Link
           mkdir build_libs
           tar -xf qwen2_android.tar -C build_libs
           
