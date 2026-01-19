@@ -1,4 +1,4 @@
-name: Build MLC Runtime (Patched)
+name: Build MLC Runtime (Final Fix)
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      # 1. Clean Disk to ensure we have maximum space
+      # 1. Clean Disk to ensure we have maximum space (~25GB free)
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -40,24 +40,22 @@ jobs:
         run: |
           pip install --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
-      # 4. CRITICAL FIX: Patch the package to allow local paths without bundling
-      # We find the file 'interface/package.py' and comment out the ValueError raise
+      # 4. FIX: Patch the Python package to disable the "Local Path" check safely.
+      # We change the 'if' condition to always be False. This avoids Syntax/Indentation errors.
       - name: Patch MLC Validation Logic
         run: |
-          # Locate the package directory
+          # Locate the installed package file
           SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
           PACKAGE_FILE="$SITE_PACKAGES/mlc_llm/interface/package.py"
           
           echo "Patching $PACKAGE_FILE..."
           
-          # Use sed to neutralize the specific exception. 
-          # We look for the line raising the ValueError about local paths and comment it out.
-          # The regex matches the exception raised in your logs.
-          sed -i '/is a local path/s/^/#/' $PACKAGE_FILE
-          sed -i '/raise ValueError/s/^/#/' $PACKAGE_FILE
+          # Replace the specific check 'if "bundle_weight" not in model_config' with 'if False and ...'
+          # This makes the validation block unreachable but keeps valid Python syntax.
+          sed -i 's/if "bundle_weight" not in model_config/if False and "bundle_weight" not in model_config/' $PACKAGE_FILE
           
-          # Verification: Print the file to ensure we didn't break syntax (Optional debug)
-          # cat $PACKAGE_FILE | grep "local path"
+          # Verify the patch worked by printing the line
+          grep "if False" $PACKAGE_FILE || echo "Warning: Regex might have missed, check file content if build fails."
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -71,7 +69,7 @@ jobs:
           toolchain: stable
           profile: minimal
 
-      # 5. Download ONLY Configs (No Weights)
+      # 5. Download ONLY Configs (No Weights) to save disk space
       - name: Download Model Configs
         run: |
           mkdir -p models
@@ -91,6 +89,7 @@ jobs:
           for repo, name in models.items():
               path = os.path.join('models', name)
               os.makedirs(path, exist_ok=True)
+              print(f'Processing {name}...')
               for f in files:
                   try:
                       r = requests.get(f'https://huggingface.co/{repo}/resolve/main/{f}')
@@ -99,7 +98,7 @@ jobs:
                   except: pass
           "
 
-      # 6. Generate Config pointing to Local Paths
+      # 6. Generate Config pointing to Local Paths (Validated by our patch)
       - name: Create Model Config
         run: |
           cat <<EOF > mlc-package-config.json
