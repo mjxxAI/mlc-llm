@@ -168,7 +168,7 @@ jobs:
           mkdir -p android_build/mlc-godot/src/main/jniLibs/arm64-v8a
           mkdir -p android_build/mlc-godot/src/main/assets
 
-          # 1. Create Root build.gradle (Vital for resolving Android Plugins)
+          # 1. Create Root build.gradle
           cat <<EOF > android_build/build.gradle
           buildscript {
               repositories {
@@ -191,8 +191,7 @@ jobs:
           # 2. Create settings.gradle
           echo "include ':mlc-godot'" > android_build/settings.gradle
 
-          # 3. Create Module build.gradle
-          # Note: We remove the version numbers here because they are defined in the root buildscript
+          # 3. Create Module build.gradle with FIXED JVM TARGETS
           cat <<EOF > android_build/mlc-godot/build.gradle
           plugins {
               id 'com.android.library'
@@ -209,6 +208,14 @@ jobs:
                   main { 
                       jniLibs.srcDirs = ['src/main/jniLibs'] 
                   } 
+              }
+              // FIX: Explicitly set JVM 17 for both Java and Kotlin
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
               }
           }
           dependencies {
@@ -228,7 +235,7 @@ jobs:
           </manifest>
           EOF
 
-      # 9. INJECT ARTIFACTS & WRAPPER (DYNAMIC FIX)
+      # 9. INJECT ARTIFACTS & WRAPPER
       - name: Inject Artifacts into Gradle Project
         run: |
           echo "🔍 Searching for build artifacts..."
@@ -335,7 +342,6 @@ jobs:
         working-directory: android_build
         run: |
           chmod +x gradlew || true
-          # FORCE Gradle 8.5 to be compatible with AGP 8.2.0
           gradle wrapper --gradle-version 8.5
           ./gradlew :mlc-godot:assembleRelease
 
