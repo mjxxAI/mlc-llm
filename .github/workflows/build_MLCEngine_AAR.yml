@@ -41,8 +41,6 @@ jobs:
           pip install --pre -U -f https://mlc.ai/wheels mlc-llm-nightly-cpu mlc-ai-nightly-cpu
 
       # 4. FIX: Apply Regex Patch to neutralize the validation check
-      # This reads the file as a single string and replaces the exception block
-      # regardless of how many lines it spans.
       - name: Patch MLC Validation Logic
         run: |
           python -c "
@@ -59,18 +57,12 @@ jobs:
               content = f.read()
 
           # 2. Define Regex Pattern
-          # Matches 'raise ValueError(' followed by anything (including newlines) 
-          # until it sees 'bundle_weight' and 'true', then matches until the closing parenthesis.
-          # We capture the arguments in group 1 so we can pass them to print() instead.
-          # The DOTALL flag (.) makes matching include newlines.
           pattern = r'raise ValueError\(([^)]*?bundle_weight.*?true.*?)\)'
           
           # 3. Check if pattern exists before replacing
           match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
           if match:
               print('Found the validation check. Neutralizing it...')
-              # Replace 'raise ValueError(...)' with 'print(...)'
-              # This keeps the code valid python but prevents the crash.
               new_content = re.sub(pattern, r'print(\1)', content, flags=re.DOTALL | re.IGNORECASE)
               
               with open(target_path, 'w') as f:
@@ -78,7 +70,6 @@ jobs:
               print('Successfully patched package.py')
           else:
               print('WARNING: Regex did not match any ValueError with bundle_weight.')
-              # Debug: Print file content snippets if needed, but let's trust the build logs
               print('File start:', content[:500])
           "
 
@@ -143,7 +134,7 @@ jobs:
             ]
           }
           EOF
-                     # 6½. Strip model_lib -> JIT mode (no extra .so)
+      
       - name: Make configs JIT-compatible
         run: |
           python -c "
@@ -177,10 +168,31 @@ jobs:
           mkdir -p android_build/mlc-godot/src/main/jniLibs/arm64-v8a
           mkdir -p android_build/mlc-godot/src/main/assets
 
-          # Create settings.gradle
+          # 1. Create Root build.gradle (Vital for resolving Android Plugins)
+          cat <<EOF > android_build/build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.2.0'
+                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          # 2. Create settings.gradle
           echo "include ':mlc-godot'" > android_build/settings.gradle
 
-          # Create build.gradle (Injecting content directly)
+          # 3. Create Module build.gradle
+          # Note: We remove the version numbers here because they are defined in the root buildscript
           cat <<EOF > android_build/mlc-godot/build.gradle
           plugins {
               id 'com.android.library'
@@ -189,8 +201,15 @@ jobs:
           android {
               namespace 'com.forge.mlc'
               compileSdk 34
-              defaultConfig { minSdk 24; targetSdk 34 }
-              sourceSets { main { jniLibs.srcDirs = ['src/main/jniLibs'] } }
+              defaultConfig { 
+                  minSdk 24
+                  targetSdk 34 
+              }
+              sourceSets { 
+                  main { 
+                      jniLibs.srcDirs = ['src/main/jniLibs'] 
+                  } 
+              }
           }
           dependencies {
               compileOnly 'org.godotengine:godot:4.2.0.stable'
@@ -199,7 +218,7 @@ jobs:
           }
           EOF
 
-          # Create AndroidManifest.xml
+          # 4. Create AndroidManifest.xml
           cat <<EOF > android_build/mlc-godot/src/main/AndroidManifest.xml
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -215,46 +234,35 @@ jobs:
           echo "🔍 Searching for build artifacts..."
           
           # A. Locate and Copy Shared Object (.so)
-          # We use find to locate the file anywhere in the workspace
           SO_PATH=$(find . -name "libtvm4j_runtime_packed.so" -type f | head -n 1)
-          
           if [ -z "$SO_PATH" ]; then
             echo "❌ CRITICAL: libtvm4j_runtime_packed.so NOT FOUND."
-            echo "Listing current directory tree for debug:"
             ls -R
             exit 1
           fi
-          
           echo "✅ Found .so at: $SO_PATH"
           cp "$SO_PATH" android_build/mlc-godot/src/main/jniLibs/arm64-v8a/
 
           # B. Locate and Copy Core JAR
           JAR_PATH=$(find . -name "tvm4j_core.jar" -type f | head -n 1)
-          
           if [ -z "$JAR_PATH" ]; then
             echo "❌ CRITICAL: tvm4j_core.jar NOT FOUND."
             exit 1
           fi
-          
           echo "✅ Found .jar at: $JAR_PATH"
           cp "$JAR_PATH" android_build/mlc-godot/libs/
 
           # C. Locate and Copy Kotlin Sources
-          # We find MLCEngine.kt to identify the correct source directory
           KT_PATH=$(find . -name "MLCEngine.kt" -type f | head -n 1)
-          
           if [ -z "$KT_PATH" ]; then
             echo "❌ CRITICAL: MLCEngine.kt NOT FOUND."
             exit 1
           fi
-          
           echo "✅ Found Kotlin source at: $KT_PATH"
           SRC_DIR=$(dirname "$KT_PATH")
-          # Copy all contents of that directory (OpenAIProtocol.kt, etc.) to our package structure
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
 
-          # D. Write the Godot Wrapper (GodotMLCPlugin.kt)
-          # This writes the bridge code that connects Godot to the artifacts we just found
+          # D. Write the Godot Wrapper
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -286,7 +294,6 @@ jobs:
                   engine = MLCEngine()
                   GlobalScope.launch {
                       try {
-                          // The 'reload' method signature in recent MLC versions uses LibFormat
                           engine?.reload(modelPath, "float16")
                           isReady = true
                           emitSignal("model_loaded")
@@ -303,11 +310,7 @@ jobs:
                   return try {
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
                       messages.add(OpenAIProtocol.ChatCompletionMessage(role = "user", content = prompt))
-                      
-                      // Using stream=false for immediate return
                       val result = engine?.chatCompletion(messages, stream = false)
-                      
-                      // Safety check on the result structure
                       if (result != null && result.choices.isNotEmpty()) {
                           result.choices[0].message.content ?: ""
                       } else {
@@ -332,8 +335,8 @@ jobs:
         working-directory: android_build
         run: |
           chmod +x gradlew || true
-          # If no gradlew exists (likely), use the system gradle or init wrapper
-          gradle wrapper
+          # FORCE Gradle 8.5 to be compatible with AGP 8.2.0
+          gradle wrapper --gradle-version 8.5
           ./gradlew :mlc-godot:assembleRelease
 
       # 11. UPLOAD FINAL AAR
