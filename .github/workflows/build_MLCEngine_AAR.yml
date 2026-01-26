@@ -269,23 +269,27 @@ jobs:
           fi
           echo "✅ Found Kotlin source at: $KT_PATH"
           
-          # DEBUG: Print file content to verify API if build fails
-          echo "=== DEBUG: MLCEngine.kt Content ==="
-          cat "$KT_PATH" | head -n 50
-          echo "==================================="
-          
+          # === INSPECTION BLOCK ===
+          echo "============================================="
+          echo "       SOURCE INSPECTION: MLCEngine.kt"
+          echo "============================================="
+          cat "$KT_PATH"
+          echo "============================================="
+
           SRC_DIR=$(dirname "$KT_PATH")
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
           
-          # DEBUG: Print OpenAIProtocol content to verify constructor
           PROTO_PATH=$(find . -name "OpenAIProtocol.kt" -type f | head -n 1)
           if [ -n "$PROTO_PATH" ]; then
-            echo "=== DEBUG: OpenAIProtocol.kt Content ==="
-            cat "$PROTO_PATH" | head -n 50
-            echo "==================================="
+            echo "============================================="
+            echo "       SOURCE INSPECTION: OpenAIProtocol.kt"
+            echo "============================================="
+            cat "$PROTO_PATH"
+            echo "============================================="
           fi
+          # ========================
 
-          # D. Write the Godot Wrapper (UPDATED API)
+          # D. Write the Godot Wrapper (TENTATIVE FIX)
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -332,8 +336,10 @@ jobs:
                   if (!isReady || engine == null) return "Error: Engine not ready"
                   
                   return try {
-                      // Fix: Instantiate Role properly
-                      val userRole = OpenAIProtocol.ChatCompletionRole("user")
+                      // Attempt 2: Use Enum Constant directly (Standard Kotlin Enum)
+                      // Lowercase 'user' is common in serialization libs, 'USER' in standard Java.
+                      // I will try 'user' based on standard JSON mapping.
+                      val userRole = OpenAIProtocol.ChatCompletionRole.user
                       
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
                       messages.add(
@@ -343,19 +349,17 @@ jobs:
                           )
                       )
                       
-                      // Fix: Create Request object
-                      // Assuming standard OpenAI structure
                       val request = OpenAIProtocol.ChatCompletionRequest(
                           messages = messages,
-                          model = "current-model" // Some APIs require model field
+                          model = "current-model"
                       )
                       
-                      // Fix: Use chat.completions.create pattern
-                      // Using runBlocking because we need a synchronous return for Godot
-                      // and 'create' is likely a suspend function.
                       runBlocking {
+                          // Using ? for null safety on engine
                           val result = engine?.chat?.completions?.create(request)
                           
+                          // Explicit check. If 'choices' fails here, we will see it in logs
+                          // against the source files we just printed.
                           if (result != null && result.choices.isNotEmpty()) {
                               result.choices[0].message.content ?: ""
                           } else {
@@ -383,13 +387,6 @@ jobs:
           chmod +x gradlew || true
           gradle wrapper --gradle-version 8.5
           ./gradlew :mlc-godot:assembleRelease
-
-      # 11. UPLOAD FINAL AAR
-      - name: Upload MLCEngine AAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: godot-mlc-plugin
-          path: android_build/mlc-godot/build/outputs/aar/mlc-godot-release.aar
 
       # 11. UPLOAD FINAL AAR
       - name: Upload MLCEngine AAR
