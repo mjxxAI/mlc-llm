@@ -168,7 +168,7 @@ jobs:
           mkdir -p android_build/mlc-godot/src/main/jniLibs/arm64-v8a
           mkdir -p android_build/mlc-godot/src/main/assets
 
-          # 1. Create Root build.gradle (Vital for resolving Android Plugins)
+          # 1. Create Root build.gradle
           cat <<EOF > android_build/build.gradle
           buildscript {
               repositories {
@@ -268,28 +268,26 @@ jobs:
             exit 1
           fi
           echo "✅ Found Kotlin source at: $KT_PATH"
-          
-          # === INSPECTION BLOCK ===
-          echo "============================================="
-          echo "       SOURCE INSPECTION: MLCEngine.kt"
-          echo "============================================="
-          cat "$KT_PATH"
-          echo "============================================="
-
           SRC_DIR=$(dirname "$KT_PATH")
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
-          
+
+          # === INTROSPECTION BLOCK ===
+          echo "=========================================================="
+          echo "        DEBUG: OpenAIProtocol.kt Class Definitions"
+          echo "=========================================================="
           PROTO_PATH=$(find . -name "OpenAIProtocol.kt" -type f | head -n 1)
           if [ -n "$PROTO_PATH" ]; then
-            echo "============================================="
-            echo "       SOURCE INSPECTION: OpenAIProtocol.kt"
-            echo "============================================="
-            cat "$PROTO_PATH"
-            echo "============================================="
+            grep -A 10 "class ChatCompletionMessageContent" "$PROTO_PATH" || echo "ChatCompletionMessageContent not found"
+            echo "----------------------------------------------------------"
+            grep -A 15 "class ChatCompletion " "$PROTO_PATH" || echo "ChatCompletion not found"
+            echo "----------------------------------------------------------"
+            grep -A 10 "class ChatCompletionChoice" "$PROTO_PATH" || echo "ChatCompletionChoice not found"
+          else
+            echo "OpenAIProtocol.kt not found for grep"
           fi
-          # ========================
-
-          # D. Write the Godot Wrapper (TENTATIVE FIX)
+          echo "=========================================================="
+          
+          # D. Write the Godot Wrapper (DEBUG/SAFE MODE)
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -336,16 +334,18 @@ jobs:
                   if (!isReady || engine == null) return "Error: Engine not ready"
                   
                   return try {
-                      // Attempt 2: Use Enum Constant directly (Standard Kotlin Enum)
-                      // Lowercase 'user' is common in serialization libs, 'USER' in standard Java.
-                      // I will try 'user' based on standard JSON mapping.
                       val userRole = OpenAIProtocol.ChatCompletionRole.user
+                      
+                      // DEBUG: Create content with null if possible, or try a Text wrapper if guessed
+                      // For now, let's try to verify if 'ChatCompletionMessageContent' has a text constructor
+                      // We will use 'null' for the content argument if it's nullable (it was marked ? in error)
+                      // Just to get the code to compile and see the grep output.
                       
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
                       messages.add(
                           OpenAIProtocol.ChatCompletionMessage(
                               role = userRole, 
-                              content = prompt
+                              content = null // Pass null to bypass constructor error for now
                           )
                       )
                       
@@ -355,13 +355,12 @@ jobs:
                       )
                       
                       runBlocking {
-                          // Using ? for null safety on engine
                           val result = engine?.chat?.completions?.create(request)
                           
-                          // Explicit check. If 'choices' fails here, we will see it in logs
-                          // against the source files we just printed.
-                          if (result != null && result.choices.isNotEmpty()) {
-                              result.choices[0].message.content ?: ""
+                          // DEBUG: Return toString() to verify object structure in Godot logs
+                          // This avoids 'Unresolved reference: choices' if the name is different
+                          if (result != null) {
+                              "DEBUG_RESULT: " + result.toString()
                           } else {
                               "Error: Empty response"
                           }
@@ -394,3 +393,4 @@ jobs:
         with:
           name: godot-mlc-plugin
           path: android_build/mlc-godot/build/outputs/aar/mlc-godot-release.aar
+
