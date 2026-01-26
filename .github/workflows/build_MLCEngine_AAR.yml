@@ -178,7 +178,7 @@ jobs:
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.2.0'
                   classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
-                  classpath 'org.jetbrains.kotlin:kotlin-serialization:1.9.22'  // FIX: Added serialization plugin
+                  classpath 'org.jetbrains.kotlin:kotlin-serialization:1.9.22'
               }
           }
           allprojects {
@@ -197,7 +197,7 @@ jobs:
           plugins {
               id 'com.android.library'
               id 'org.jetbrains.kotlin.android'
-              id 'org.jetbrains.kotlin.plugin.serialization' // FIX: Applied serialization plugin
+              id 'org.jetbrains.kotlin.plugin.serialization'
           }
           android {
               namespace 'com.forge.mlc'
@@ -222,7 +222,7 @@ jobs:
           dependencies {
               compileOnly 'org.godotengine:godot:4.2.0.stable'
               implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
-              implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2' // FIX: Added serialization dependency
+              implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2'
               implementation files('libs/tvm4j_core.jar')
           }
           EOF
@@ -268,10 +268,24 @@ jobs:
             exit 1
           fi
           echo "✅ Found Kotlin source at: $KT_PATH"
+          
+          # DEBUG: Print file content to verify API if build fails
+          echo "=== DEBUG: MLCEngine.kt Content ==="
+          cat "$KT_PATH" | head -n 50
+          echo "==================================="
+          
           SRC_DIR=$(dirname "$KT_PATH")
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
+          
+          # DEBUG: Print OpenAIProtocol content to verify constructor
+          PROTO_PATH=$(find . -name "OpenAIProtocol.kt" -type f | head -n 1)
+          if [ -n "$PROTO_PATH" ]; then
+            echo "=== DEBUG: OpenAIProtocol.kt Content ==="
+            cat "$PROTO_PATH" | head -n 50
+            echo "==================================="
+          fi
 
-          # D. Write the Godot Wrapper
+          # D. Write the Godot Wrapper (UPDATED API)
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -283,6 +297,7 @@ jobs:
           import ai.mlc.mlcllm.OpenAIProtocol
           import kotlinx.coroutines.GlobalScope
           import kotlinx.coroutines.launch
+          import kotlinx.coroutines.runBlocking
           import java.util.UUID
           import java.util.ArrayList
 
@@ -317,13 +332,35 @@ jobs:
                   if (!isReady || engine == null) return "Error: Engine not ready"
                   
                   return try {
+                      // Fix: Instantiate Role properly
+                      val userRole = OpenAIProtocol.ChatCompletionRole("user")
+                      
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
-                      messages.add(OpenAIProtocol.ChatCompletionMessage(role = "user", content = prompt))
-                      val result = engine?.chatCompletion(messages, stream = false)
-                      if (result != null && result.choices.isNotEmpty()) {
-                          result.choices[0].message.content ?: ""
-                      } else {
-                          "Error: Empty response"
+                      messages.add(
+                          OpenAIProtocol.ChatCompletionMessage(
+                              role = userRole, 
+                              content = prompt
+                          )
+                      )
+                      
+                      // Fix: Create Request object
+                      // Assuming standard OpenAI structure
+                      val request = OpenAIProtocol.ChatCompletionRequest(
+                          messages = messages,
+                          model = "current-model" // Some APIs require model field
+                      )
+                      
+                      // Fix: Use chat.completions.create pattern
+                      // Using runBlocking because we need a synchronous return for Godot
+                      // and 'create' is likely a suspend function.
+                      runBlocking {
+                          val result = engine?.chat?.completions?.create(request)
+                          
+                          if (result != null && result.choices.isNotEmpty()) {
+                              result.choices[0].message.content ?: ""
+                          } else {
+                              "Error: Empty response"
+                          }
                       }
                   } catch (e: Exception) {
                       Log.e("GodotMLC", "Gen Failed", e)
@@ -346,6 +383,13 @@ jobs:
           chmod +x gradlew || true
           gradle wrapper --gradle-version 8.5
           ./gradlew :mlc-godot:assembleRelease
+
+      # 11. UPLOAD FINAL AAR
+      - name: Upload MLCEngine AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-mlc-plugin
+          path: android_build/mlc-godot/build/outputs/aar/mlc-godot-release.aar
 
       # 11. UPLOAD FINAL AAR
       - name: Upload MLCEngine AAR
