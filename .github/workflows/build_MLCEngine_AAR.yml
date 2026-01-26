@@ -209,21 +209,52 @@ jobs:
           </manifest>
           EOF
 
-      # 9. INJECT ARTIFACTS & WRAPPER
+      # 9. INJECT ARTIFACTS & WRAPPER (DYNAMIC FIX)
       - name: Inject Artifacts into Gradle Project
         run: |
-          # A. Copy Shared Object (.so) to jniLibs
-          # Note: Adjust source path if 'mlc_llm package' output structure varies
-          cp dist/lib/mlc4j/libtvm4j_runtime_packed.so android_build/mlc-godot/src/main/jniLibs/arm64-v8a/
+          echo "🔍 Searching for build artifacts..."
+          
+          # A. Locate and Copy Shared Object (.so)
+          # We use find to locate the file anywhere in the workspace
+          SO_PATH=$(find . -name "libtvm4j_runtime_packed.so" -type f | head -n 1)
+          
+          if [ -z "$SO_PATH" ]; then
+            echo "❌ CRITICAL: libtvm4j_runtime_packed.so NOT FOUND."
+            echo "Listing current directory tree for debug:"
+            ls -R
+            exit 1
+          fi
+          
+          echo "✅ Found .so at: $SO_PATH"
+          cp "$SO_PATH" android_build/mlc-godot/src/main/jniLibs/arm64-v8a/
 
-          # B. Copy Core JAR to libs
-          cp dist/lib/mlc4j/tvm4j_core.jar android_build/mlc-godot/libs/
+          # B. Locate and Copy Core JAR
+          JAR_PATH=$(find . -name "tvm4j_core.jar" -type f | head -n 1)
+          
+          if [ -z "$JAR_PATH" ]; then
+            echo "❌ CRITICAL: tvm4j_core.jar NOT FOUND."
+            exit 1
+          fi
+          
+          echo "✅ Found .jar at: $JAR_PATH"
+          cp "$JAR_PATH" android_build/mlc-godot/libs/
 
-          # C. Copy Kotlin Sources (MLCEngine.kt, OpenAIProtocol.kt, etc.)
-          # We copy all .kt and .java files from the output to the source set
-          cp -r dist/lib/mlc4j/src/main/java/ai/mlc/mlcllm/* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
+          # C. Locate and Copy Kotlin Sources
+          # We find MLCEngine.kt to identify the correct source directory
+          KT_PATH=$(find . -name "MLCEngine.kt" -type f | head -n 1)
+          
+          if [ -z "$KT_PATH" ]; then
+            echo "❌ CRITICAL: MLCEngine.kt NOT FOUND."
+            exit 1
+          fi
+          
+          echo "✅ Found Kotlin source at: $KT_PATH"
+          SRC_DIR=$(dirname "$KT_PATH")
+          # Copy all contents of that directory (OpenAIProtocol.kt, etc.) to our package structure
+          cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
 
           # D. Write the Godot Wrapper (GodotMLCPlugin.kt)
+          # This writes the bridge code that connects Godot to the artifacts we just found
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -236,6 +267,7 @@ jobs:
           import kotlinx.coroutines.GlobalScope
           import kotlinx.coroutines.launch
           import java.util.UUID
+          import java.util.ArrayList
 
           class GodotMLCPlugin(godot: Godot) : GodotPlugin(godot) {
 
@@ -254,7 +286,7 @@ jobs:
                   engine = MLCEngine()
                   GlobalScope.launch {
                       try {
-                          // Using raw string signature found in typical MLCEngine.kt
+                          // The 'reload' method signature in recent MLC versions uses LibFormat
                           engine?.reload(modelPath, "float16")
                           isReady = true
                           emitSignal("model_loaded")
@@ -268,17 +300,21 @@ jobs:
               fun generate(prompt: String): String {
                   if (!isReady || engine == null) return "Error: Engine not ready"
                   
-                  // Construct Message list expected by MLCEngine
-                  val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
-                  messages.add(OpenAIProtocol.ChatCompletionMessage(role = "user", content = prompt))
-                  
-                  // Synchronous call (blocks thread, but returns immediately for ZAP compliance)
-                  // For production, this should likely be threaded or async
                   return try {
+                      val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
+                      messages.add(OpenAIProtocol.ChatCompletionMessage(role = "user", content = prompt))
+                      
+                      // Using stream=false for immediate return
                       val result = engine?.chatCompletion(messages, stream = false)
-                      // Extract the content from the first choice
-                      result?.choices?.get(0)?.message?.content ?: ""
+                      
+                      // Safety check on the result structure
+                      if (result != null && result.choices.isNotEmpty()) {
+                          result.choices[0].message.content ?: ""
+                      } else {
+                          "Error: Empty response"
+                      }
                   } catch (e: Exception) {
+                      Log.e("GodotMLC", "Gen Failed", e)
                       "Error: \${e.message}"
                   }
               }
