@@ -168,7 +168,7 @@ jobs:
           mkdir -p android_build/mlc-godot/src/main/jniLibs/arm64-v8a
           mkdir -p android_build/mlc-godot/src/main/assets
 
-          # 1. Create Root build.gradle
+          # 1. Create Root build.gradle (Vital for resolving Android Plugins)
           cat <<EOF > android_build/build.gradle
           buildscript {
               repositories {
@@ -178,6 +178,7 @@ jobs:
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.2.0'
                   classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22'
+                  classpath 'org.jetbrains.kotlin:kotlin-serialization:1.9.22'  // FIX: Added serialization plugin
               }
           }
           allprojects {
@@ -191,11 +192,12 @@ jobs:
           # 2. Create settings.gradle
           echo "include ':mlc-godot'" > android_build/settings.gradle
 
-          # 3. Create Module build.gradle with FIXED JVM TARGETS
+          # 3. Create Module build.gradle
           cat <<EOF > android_build/mlc-godot/build.gradle
           plugins {
               id 'com.android.library'
               id 'org.jetbrains.kotlin.android'
+              id 'org.jetbrains.kotlin.plugin.serialization' // FIX: Applied serialization plugin
           }
           android {
               namespace 'com.forge.mlc'
@@ -209,7 +211,6 @@ jobs:
                       jniLibs.srcDirs = ['src/main/jniLibs'] 
                   } 
               }
-              // FIX: Explicitly set JVM 17 for both Java and Kotlin
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
@@ -221,6 +222,7 @@ jobs:
           dependencies {
               compileOnly 'org.godotengine:godot:4.2.0.stable'
               implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+              implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2' // FIX: Added serialization dependency
               implementation files('libs/tvm4j_core.jar')
           }
           EOF
