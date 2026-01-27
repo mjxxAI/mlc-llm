@@ -271,20 +271,7 @@ jobs:
           SRC_DIR=$(dirname "$KT_PATH")
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
 
-          # === FULL INSPECTION BLOCK ===
-          echo "=========================================================="
-          echo "        FULL SOURCE DUMP: OpenAIProtocol.kt"
-          echo "=========================================================="
-          PROTO_PATH=$(find . -name "OpenAIProtocol.kt" -type f | head -n 1)
-          if [ -n "$PROTO_PATH" ]; then
-            cat "$PROTO_PATH"
-          else
-            echo "❌ OpenAIProtocol.kt NOT FOUND"
-          fi
-          echo "=========================================================="
-          # =============================
-
-          # D. Write the Godot Wrapper (JSON Forwarding Mode)
+          # D. Write the Godot Wrapper (Final Production Version)
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -306,7 +293,6 @@ jobs:
               private var engine: MLCEngine? = null
               private var isReady = false
               
-              // Configure lenient JSON to handle unknown keys if protocol drifts
               private val json = Json { 
                   ignoreUnknownKeys = true 
                   encodeDefaults = true
@@ -339,9 +325,6 @@ jobs:
                   
                   return try {
                       val userRole = OpenAIProtocol.ChatCompletionRole.user
-                      
-                      // Fix: Correct constructor usage based on inspection
-                      // ChatCompletionMessageContent(text: String)
                       val content = OpenAIProtocol.ChatCompletionMessageContent(text = prompt)
                       
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
@@ -354,16 +337,14 @@ jobs:
                       
                       val request = OpenAIProtocol.ChatCompletionRequest(
                           messages = messages,
-                          model = "current-model"
+                          model = "current-model",
+                          stream = false
                       )
                       
                       runBlocking {
                           val result = engine?.chat?.completions?.create(request)
                           
                           if (result != null) {
-                              // Use Serialization to return the full object as JSON string
-                              // This allows Godot to parse 'choices', 'usage', etc. without
-                              // this plugin needing to know the exact class structure.
                               json.encodeToString(result)
                           } else {
                               "Error: Empty response"
