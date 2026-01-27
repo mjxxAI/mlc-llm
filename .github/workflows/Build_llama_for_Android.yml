@@ -1,4 +1,3 @@
-```yaml
 name: Build llama.cpp for Android - Yoga Pad Pro AI (Snapdragon 8 Gen 3)
 
 on:
@@ -748,4 +747,3 @@ jobs:
           echo "ARMv9 Optimized: $(test -f dist/jniLibs/arm64-v8a/libllama.so-armv9 && echo 'YES ✓' || echo 'NO ✗')"
           echo "ARMv8 Fallback:  $(test -f dist/jniLibs/arm64-v8a/libllama.so-armv8 && echo 'YES ✓' || echo 'NO ✗')"
           echo "=========================================="
-```
