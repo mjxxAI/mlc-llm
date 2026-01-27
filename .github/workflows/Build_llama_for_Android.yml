@@ -1,3 +1,4 @@
+```yaml
 name: Build llama.cpp for Android - Yoga Pad Pro AI (Snapdragon 8 Gen 3)
 
 on:
@@ -37,12 +38,18 @@ jobs:
 
     steps:
       # 1. Free Disk Space (llama.cpp + NDK is huge)
+      # FIXED: Don't delete /usr/local/lib/android - setup-android needs write access there
       - name: Free Disk Space
         run: |
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
           sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/local/share/chromium
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
           sudo docker image prune --all --force
           df -h
 
@@ -544,3 +551,4 @@ jobs:
           echo "ARMv9 Optimized: $(test -f dist/jniLibs/arm64-v8a/libllama.so-armv9 && echo 'YES ✓' || echo 'NO ✗')"
           echo "ARMv8 Fallback:  $(test -f dist/jniLibs/arm64-v8a/libllama.so-armv8 && echo 'YES ✓' || echo 'NO ✗')"
           echo "=========================================="
+```
