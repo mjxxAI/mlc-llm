@@ -264,7 +264,7 @@ jobs:
           
           ## Usage with Your Godot Service
           Replace MLC-LLM engine initialization with:
-```kotlin
+
           import de.kherud.llama.LlamaModel
           import de.kherud.llama.ModelParameters
           
@@ -276,7 +276,6 @@ jobs:
           val model = LlamaModel("/path/to/model.gguf", params)
           val response = model.generate("Your prompt", maxTokens = 512)
           model.close()
-```
           
           ## Model Recommendations
           - Phi-2 Q4_K_M (~1.5GB) - Fast, good quality
