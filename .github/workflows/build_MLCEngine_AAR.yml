@@ -271,23 +271,20 @@ jobs:
           SRC_DIR=$(dirname "$KT_PATH")
           cp -r "$SRC_DIR/"* android_build/mlc-godot/src/main/java/ai/mlc/mlcllm/
 
-          # === INTROSPECTION BLOCK ===
+          # === FULL INSPECTION BLOCK ===
           echo "=========================================================="
-          echo "        DEBUG: OpenAIProtocol.kt Class Definitions"
+          echo "        FULL SOURCE DUMP: OpenAIProtocol.kt"
           echo "=========================================================="
           PROTO_PATH=$(find . -name "OpenAIProtocol.kt" -type f | head -n 1)
           if [ -n "$PROTO_PATH" ]; then
-            grep -A 10 "class ChatCompletionMessageContent" "$PROTO_PATH" || echo "ChatCompletionMessageContent not found"
-            echo "----------------------------------------------------------"
-            grep -A 15 "class ChatCompletion " "$PROTO_PATH" || echo "ChatCompletion not found"
-            echo "----------------------------------------------------------"
-            grep -A 10 "class ChatCompletionChoice" "$PROTO_PATH" || echo "ChatCompletionChoice not found"
+            cat "$PROTO_PATH"
           else
-            echo "OpenAIProtocol.kt not found for grep"
+            echo "❌ OpenAIProtocol.kt NOT FOUND"
           fi
           echo "=========================================================="
-          
-          # D. Write the Godot Wrapper (DEBUG/SAFE MODE)
+          # =============================
+
+          # D. Write the Godot Wrapper (JSON Forwarding Mode)
           cat <<EOF > android_build/mlc-godot/src/main/java/com/forge/mlc/GodotMLCPlugin.kt
           package com.forge.mlc
 
@@ -300,13 +297,20 @@ jobs:
           import kotlinx.coroutines.GlobalScope
           import kotlinx.coroutines.launch
           import kotlinx.coroutines.runBlocking
-          import java.util.UUID
+          import kotlinx.serialization.encodeToString
+          import kotlinx.serialization.json.Json
           import java.util.ArrayList
 
           class GodotMLCPlugin(godot: Godot) : GodotPlugin(godot) {
 
               private var engine: MLCEngine? = null
               private var isReady = false
+              
+              // Configure lenient JSON to handle unknown keys if protocol drifts
+              private val json = Json { 
+                  ignoreUnknownKeys = true 
+                  encodeDefaults = true
+              }
 
               override fun getPluginName() = "MLCEngine"
 
@@ -336,16 +340,15 @@ jobs:
                   return try {
                       val userRole = OpenAIProtocol.ChatCompletionRole.user
                       
-                      // DEBUG: Create content with null if possible, or try a Text wrapper if guessed
-                      // For now, let's try to verify if 'ChatCompletionMessageContent' has a text constructor
-                      // We will use 'null' for the content argument if it's nullable (it was marked ? in error)
-                      // Just to get the code to compile and see the grep output.
+                      // Fix: Correct constructor usage based on inspection
+                      // ChatCompletionMessageContent(text: String)
+                      val content = OpenAIProtocol.ChatCompletionMessageContent(text = prompt)
                       
                       val messages = ArrayList<OpenAIProtocol.ChatCompletionMessage>()
                       messages.add(
                           OpenAIProtocol.ChatCompletionMessage(
                               role = userRole, 
-                              content = null // Pass null to bypass constructor error for now
+                              content = content
                           )
                       )
                       
@@ -357,10 +360,11 @@ jobs:
                       runBlocking {
                           val result = engine?.chat?.completions?.create(request)
                           
-                          // DEBUG: Return toString() to verify object structure in Godot logs
-                          // This avoids 'Unresolved reference: choices' if the name is different
                           if (result != null) {
-                              "DEBUG_RESULT: " + result.toString()
+                              // Use Serialization to return the full object as JSON string
+                              // This allows Godot to parse 'choices', 'usage', etc. without
+                              // this plugin needing to know the exact class structure.
+                              json.encodeToString(result)
                           } else {
                               "Error: Empty response"
                           }
@@ -393,4 +397,5 @@ jobs:
         with:
           name: godot-mlc-plugin
           path: android_build/mlc-godot/build/outputs/aar/mlc-godot-release.aar
+
 
